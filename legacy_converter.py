@@ -10,9 +10,9 @@ Requirements:
   - pip install pywin32
 
 Usage:
-  python legacy_converter.py --input C:\path\to\files --output C:\path\to\output
-  python legacy_converter.py --input C:\path\to\files  # outputs alongside originals
-  python legacy_converter.py --file C:\path\to\file.doc  # single file
+  python legacy_converter.py --input C:\\path\\to\\files --output C:\\path\\to\\output
+  python legacy_converter.py --input C:\\path\\to\\files  # outputs alongside originals
+  python legacy_converter.py --file C:\\path\\to\\file.doc  # single file
 """
 
 import os
@@ -163,7 +163,14 @@ def convert_file(src: Path, dest_dir: Path = None) -> Path | None:
         if app_name == "word":
             app = win32com.client.Dispatch("Word.Application")
             app.Visible = False
-            doc = app.Documents.Open(str(src.resolve()))
+            app.AutomationSecurity = 1  # msoAutomationSecurityLow
+            app.WordBasic.DisableAutoMacros()
+            doc = app.Documents.Open(
+                str(src.resolve()),
+                ConfirmConversions=False,
+                AddToRecentFiles=False,
+                OpenAndRepair=False,
+            )
             doc.SaveAs2(str(dest.resolve()), FileFormat=save_format)
             doc.Close()
 
@@ -171,12 +178,14 @@ def convert_file(src: Path, dest_dir: Path = None) -> Path | None:
             app = win32com.client.Dispatch("Excel.Application")
             app.Visible = False
             app.DisplayAlerts = False
-            wb = app.Workbooks.Open(str(src.resolve()))
+            app.AutomationSecurity = 1  # msoAutomationSecurityLow
+            wb = app.Workbooks.Open(str(src.resolve()), AddToMru=False)
             wb.SaveAs(str(dest.resolve()), FileFormat=save_format)
             wb.Close()
 
         elif app_name == "powerpoint":
             app = win32com.client.Dispatch("PowerPoint.Application")
+            app.AutomationSecurity = 1  # msoAutomationSecurityLow
             prs = app.Presentations.Open(str(src.resolve()), WithWindow=False)
             prs.SaveAs(str(dest.resolve()), FileFormat=save_format)
             prs.Close()
