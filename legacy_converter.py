@@ -43,6 +43,86 @@ NEW_EXT = {
     ".pot": ".pptx",
 }
 
+# Trust Center File Block registry paths (Office 16.0 / 365)
+_TRUST_CENTER_PATHS = {
+    "word":       r"Software\Microsoft\Office\16.0\Word\Security\FileBlock",
+    "excel":      r"Software\Microsoft\Office\16.0\Excel\Security\FileBlock",
+    "powerpoint": r"Software\Microsoft\Office\16.0\PowerPoint\Security\FileBlock",
+}
+
+# Maps file extension → (app, registry value name)
+# These control which legacy formats are blocked in the Trust Center
+_FILE_BLOCK_VALUES = {
+    ".doc": ("word",       "BinaryFiles"),
+    ".dot": ("word",       "BinaryFiles"),
+    ".xls": ("excel",      "XL9597WorkbooksAndTemplates"),
+    ".xlt": ("excel",      "XL9597WorkbooksAndTemplates"),
+    ".ppt": ("powerpoint", "PowerPoint972003Presentations"),
+    ".pot": ("powerpoint", "PowerPoint972003Presentations"),
+}
+
+
+def _set_trust_center_file_block(ext: str, block: bool) -> tuple:
+    """
+    Temporarily allow or restore a Trust Center File Block setting.
+
+    Returns (key_path, value_name, original_value) on success,
+    or (None, None, None) if registry access failed or key not applicable.
+
+    block=False → set to 0 (allow open)
+    block=True  → restore original value
+    """
+    try:
+        import winreg
+    except ImportError:
+        return None, None, None
+
+    if ext not in _FILE_BLOCK_VALUES:
+        return None, None, None
+
+    app_name, value_name = _FILE_BLOCK_VALUES[ext]
+    key_path = _TRUST_CENTER_PATHS[app_name]
+
+    try:
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_ALL_ACCESS)
+    except OSError:
+        # Key doesn't exist yet — no block is set, nothing to do
+        return None, None, None
+
+    try:
+        original, _ = winreg.QueryValueEx(key, value_name)
+    except OSError:
+        original = None  # Value not present → no block configured
+
+    try:
+        if not block:
+            winreg.SetValueEx(key, value_name, 0, winreg.REG_DWORD, 0)
+        winreg.CloseKey(key)
+        return key_path, value_name, original
+    except OSError as e:
+        winreg.CloseKey(key)
+        log.warning(f"Could not modify Trust Center File Block (may be GPO-enforced): {e}")
+        return None, None, None
+
+
+def _restore_trust_center_file_block(key_path: str, value_name: str, original):
+    """Restore a previously modified Trust Center File Block registry value."""
+    if key_path is None:
+        return
+    try:
+        import winreg
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_ALL_ACCESS)
+        if original is None:
+            try:
+                winreg.DeleteValue(key, value_name)
+            except OSError:
+                pass
+        else:
+            winreg.SetValueEx(key, value_name, 0, winreg.REG_DWORD, original)
+        winreg.CloseKey(key)
+    except Exception:
+        pass
+
 
 def convert_file(src: Path, dest_dir: Path = None) -> Path | None:
     """Convert a single legacy Office file to its modern equivalent."""
@@ -71,6 +151,9 @@ def convert_file(src: Path, dest_dir: Path = None) -> Path | None:
     if dest.exists():
         log.info(f"Already exists, skipping: {dest.name}")
         return dest
+
+    # Temporarily disable Trust Center File Block for this extension
+    key_path, value_name, original = _set_trust_center_file_block(ext, block=False)
 
     pythoncom.CoInitialize()
     app = None
@@ -112,6 +195,8 @@ def convert_file(src: Path, dest_dir: Path = None) -> Path | None:
             except Exception:
                 pass
         pythoncom.CoUninitialize()
+        # Always restore the original File Block setting
+        _restore_trust_center_file_block(key_path, value_name, original)
 
 
 def convert_directory(input_dir: Path, output_dir: Path = None, recursive: bool = False):
